@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.25.0"
+__generated_with = "0.25.1"
 app = marimo.App(
     width="medium",
     app_title="TD 1 - Vision avancée et transfer learning",
@@ -377,9 +377,9 @@ def _(mo):
     mo.md(r"""
     **Votre réponse :**
 
-    1. ...
-    2. ...
-    3. ...
+    1. Les trois modèles ne sont pas toujours d'accord surtoût dans le cas où ils font leur prédiction avec une faible probabilité. Quand ils se trompent l'erreur est raisonnable dans le sens où eux même ont fait leur prédiction avec une faible probabilité.
+    2. Le modèle affiche un score faible lorsque l'objet est absent des 1000 classes (un peu plus de 10 % pour le top 1), l'usage d'un score de confiance permet donc également de déduire pourquoi le modèle se trompe.
+    3. Le modèle le plus rapide est deit_tiny, c'est donc plutôt celui ci qu'on utiliserait sur une machine sans GPU.
     """)
     return
 
@@ -447,19 +447,36 @@ def _(mo):
     teste si le modèle a un attribut `fc`, ce qui permet d'écrire une seule fonction pour les trois modèles.
 
     - ResNet-18 (torchvision) : la tête s'appelle `fc`
-    - EfficientNet-B0 (torchvision) : ?
-    - DeiT-tiny (timm) : ?
+    - EfficientNet-B0 (torchvision) : la tête s'appelle `classifier`
+    - DeiT-tiny (timm) : la tête d'appelle `head`
     """)
     return
 
 
 @app.cell
-def _(nn):
+def _(tp):
+    modules_enet = [n for n, _ in tp.charger_modele("efficientnet_b0").named_children()]
+    modules_deit = [n for n, _ in tp.charger_modele("deit_tiny").named_children()]
+    print(modules_enet[-1]) 
+    print(modules_deit[-1]) 
+    return
+
+
+@app.cell
+def _(torch):
     def retirer_tete(modele):
         """Remplace la couche de classification par nn.Identity() et renvoie le modèle."""
         # TODO 1 : trouvez la tête de classification et remplacez-la par nn.Identity().
         # La même fonction doit marcher pour les trois modèles.
+        if hasattr(modele, "fc"):
+            modele.fc = torch.nn.Identity()
+        elif hasattr(modele, "classifier"):
+            modele.classifier = torch.nn.Identity()
+        else:
+            modele.head = torch.nn.Identity()
+        return modele
         raise NotImplementedError("À compléter")
+
     return (retirer_tete,)
 
 
@@ -576,8 +593,8 @@ def _(mo):
     mo.md(r"""
     **Votre réponse :**
 
-    1. ...
-    2. ...
+    1. L'architecture qui donne les meilleurs embeddings est efficientnet, celle qui a le plus de parametres est resnet.
+    2. L'architecture qui offre le meilleur compromis pour une machine sans GPU est deit_tiny qui a certes la moins bonne accuracy mais son temps de calcul est bien inférieur au deux autres.
     """)
     return
 
@@ -611,7 +628,38 @@ def _(np):
     def descripteurs_classiques(image):
         """image : PIL.Image -> vecteur numpy de longueur 1812 (HOG + histogrammes de couleur)."""
         # TODO 2
+        image = image.resize((128,128)).convert("RGB")
+        img=np.array(image)
+        img = img / 255.0
+    
+        hog_features = hog(
+            img,
+            orientations=9,
+            pixels_per_cell=(16, 16), 
+            cells_per_block=(2, 2),
+            channel_axis=-1
+        )
+    
+        color_features = []
+
+        for channel in range(3):  # R, G, B
+            hist, _ = np.histogram(
+                img[:, :, channel],
+                bins=16,
+                range=(0, 256)
+            )
+
+            # Normaliser pour que la somme soit égale à 1
+            hist = hist / hist.sum()
+            color_features.extend(hist)
+
+        color_features = np.array(color_features)
+
+        features = np.concatenate([hog_features, color_features])
+    
+        return features
         raise NotImplementedError("À compléter")
+
     return (descripteurs_classiques,)
 
 
@@ -665,7 +713,7 @@ def _(
 def _(mo, resultat_classique, resultats_fe, tp):
     tableau_comparatif = [resultat_classique] + list(resultats_fe)
     mo.vstack([mo.md(f"Hasard : {1 / 37:.1%} (37 classes)."), tp.tableau(tableau_comparatif, mo)])
-    return (tableau_comparatif,)
+    return
 
 
 @app.cell(hide_code=True)
@@ -686,9 +734,9 @@ def _(mo):
     mo.md(r"""
     **Votre réponse :**
 
-    1. ...
-    2. ...
-    3. ...
+    1. Sur la validation on a une accuracy de 14% pour la baseline et > 90% pour le deep learning, cet écart justifie complètement le coup du calcul nécessaire au deep learning.
+    2. De simple descripteurs construit à la main ne peuvent pas distinguer 2 races proches qui aurait des couleurs / formes similaires.
+    3. Par exemple si on voulait construire un modèle qui prendrait les drapeux de chaque pays et l'associerait à son continent. Ici généralement les pays d'un même continent utilise des couleurs similaire ou des formes similaire pour leurs drapeaux.
     """)
     return
 
@@ -722,6 +770,18 @@ def _(mo):
 def geler_backbone(modele, n_etages_degeles):
     """Gèle tout sauf les n derniers étages de modele.features et modele.classifier. Renvoie le modèle."""
     # TODO 3
+    for p in modele.parameters():
+        p.requires_grad = False
+        
+    if n_etages_degeles != 0:
+        for feature in modele.features[-n_etages_degeles:]:
+            for p in feature.parameters():
+                p.requires_grad = True
+            
+    for p in modele.classifier.parameters():
+        p.requires_grad = True
+    
+    return modele
     raise NotImplementedError("À compléter")
 
 
@@ -753,7 +813,20 @@ def _(torch):
     def creer_optimiseur(modele, lr_tete, lr_backbone):
         """Renvoie un AdamW avec un learning rate pour la tête et un autre pour le backbone dégelé."""
         # TODO 4
+        param_tete = [p for p in modele.classifier.parameters() if p.requires_grad == True]
+        param_backbone = [p for p in modele.features.parameters() if p.requires_grad == True]
+        if param_backbone != []:
+            optimiseur = torch.optim.AdamW([
+                 {"params": param_tete, "lr": lr_tete}, 
+                 {"params": param_backbone, "lr": lr_backbone}, 
+            ], weight_decay=1e-4)
+        else :
+            optimiseur = torch.optim.AdamW([
+                 {"params": param_tete, "lr": lr_tete}, 
+            ], weight_decay=1e-4)
+        return optimiseur
         raise NotImplementedError("À compléter")
+
     return (creer_optimiseur,)
 
 
@@ -783,6 +856,23 @@ def _(mo):
 def entrainer_une_epoque(modele, chargeur, optimiseur, critere, appareil):
     """Entraîne le modèle sur un passage complet du chargeur. Renvoie la perte moyenne (float)."""
     # TODO 5
+    perte_total = 0.0
+    nb_examples = 0
+    modele.train() # BatchNorm, dropout : mode entraînement
+    
+    for x, y in chargeur:
+        x = x.to(appareil)
+        y = y.to(appareil)
+        
+        optimiseur.zero_grad()
+        perte = critere(modele(x), y)
+        perte.backward()
+        optimiseur.step()
+
+        perte_total += float(perte.item()) * x.size(0)
+        nb_examples += x.size(0)
+             
+    return perte_total / nb_examples
     raise NotImplementedError("À compléter")
 
 
@@ -923,12 +1013,13 @@ def _(mo):
 
     | Étages dégelés | Époques | LR tête | LR backbone | Accuracy de validation | Durée |
     |---|---|---|---|---|---|
-    | 0 | | | | | |
-    | | | | | | |
+    | 0 | 3 | 3e-3 | 3e-4 | 74.3% | 111s |
+    | 2 | 3 | 3e-3 | 3e-4 | 78.1% | 119s |
+    | 3 | 5 | 3e-3 | 3e-4 | 81.6% | 250s |
 
     Conclusion (à résolution égale, dégeler des étages vaut-il son coût par rapport à la tête seule ? Les écarts
     dépassent-ils l'incertitude de mesure ? Comment le résultat se situe-t-il par rapport au meilleur score de
-    l'étape 4 ? Quelle configuration retenez-vous ?) : ...
+    l'étape 4 ? Quelle configuration retenez-vous ?) : Dégeler des étages peut valoir son coup par rapport à la tête seule en dégelant deux étages on gagne 4% d'accuracy pour seulement 8s de temps de calcul, dans tous les cas les résultats sont moins bons que ceux de l'étape 4, je vais retenir la configuration avec 2 étages dégelés et 3 époques.
     """)
     return
 
@@ -974,7 +1065,17 @@ def _(bouton_test, classes, img_te, mo, modele_ft, np, tp, y_te):
 
 
 @app.cell(hide_code=True)
-def _(descripteurs_classiques, historique_ft, img_te, mo, np, pred_ft, svm_classique, tp, y_te):
+def _(
+    descripteurs_classiques,
+    historique_ft,
+    img_te,
+    mo,
+    np,
+    pred_ft,
+    svm_classique,
+    tp,
+    y_te,
+):
     _ds = tp.DatasetImages(img_te, y_te, transform=lambda x: x)
     _f_te = np.stack([descripteurs_classiques(_ds.image_brute(i)) for i in range(len(_ds))])
     _acc_classique = float(np.mean(svm_classique.predict(_f_te) == np.asarray(y_te)))
@@ -1005,6 +1106,14 @@ def _(mo):
 def paires_les_plus_confondues(matrice, noms, k=5):
     """matrice[i, j] = nombre d'images de classe i prédites j. Renvoie [(nom_i, nom_j, nombre), ...]."""
     # TODO 6
+    paires = []
+    for i in range(len(matrice)):
+        for j in range(len(matrice)):
+            if i != j and matrice[i,j] != 0:
+                paires.append((noms[i],noms[j],int(matrice[i,j])))
+                    
+    paires.sort(key=lambda paire:paire[2],reverse=True)                    
+    return paires[:k]
     raise NotImplementedError("À compléter")
 
 
@@ -1040,6 +1149,7 @@ def _(mo):
     résolution, modèle) proposeriez-vous pour les réduire ? Elles seraient à évaluer sur la validation, puis sur
     un nouveau jeu de test.
 
+    Oui ces confusions sont compréhensible pour un humain, des pistes d'amélioration pourrait être d'augmenter le nombre de données où le modèle fait le plus de confusion pour qu'il apprenne à mieux différencier les races.
     ...
     """)
     return
@@ -1083,10 +1193,62 @@ def _(mo):
 @app.cell
 def _(torch):
     def grad_cam(modele, couche, image, classe=None):
-        """image : tenseur (1, 3, H, W). Renvoie une carte numpy (h, w) dans [0, 1] pour `classe`
-        (par défaut, la classe prédite)."""
-        # TODO 7
-        raise NotImplementedError("À compléter")
+        """
+        image : tenseur (1, 3, H, W). Renvoie une carte numpy (h, w) dans [0, 1] pour `classe`
+        (par défaut, la classe prédite).
+        """
+        modele.eval()
+    
+        activations = {}
+        gradients = {}
+    
+        # 1. Crochet (hook) pour récupérer les activations et enregistrer un hook sur les gradients
+        def forward_hook(module, entree, sortie):
+            nonlocal activations, gradients
+            activations = sortie
+        
+            def backward_hook(grad):
+                nonlocal gradients
+                gradients = grad
+            
+            sortie.register_hook(backward_hook)
+        
+        # Enregistrement du crochet sur la couche cible
+        handle = couche.register_forward_hook(forward_hook)
+    
+        # 2. Passe avant (forward pass) sans désactiver les gradients
+        output = modele(image)
+    
+        if classe is None:
+            classe = output.argmax(dim=1).item()
+        
+        score = output[0, classe]
+    
+        # 3. Rétropropagation à partir du score de la classe visée
+        modele.zero_grad()
+        score.backward()
+    
+        # Suppression du crochet de la couche à la fin
+        handle.remove()
+    
+        # 4. Calcul des poids alpha (moyenne du gradient sur les dimensions spatiales h et w)
+        # gradients a la forme (1, K, h, w)
+        alpha = gradients.mean(dim=[2, 3]) # Formule : (1/Z) * sum(∂yc / ∂Ak)
+    
+        # 5. Combinaison linéaire pondérée des activations
+        # activations a la forme (1, K, h, w), alpha a la forme (1, K)
+        # On multiplie chaque canal k par son poids alpha_k et on somme sur tous les canaux K
+        cam = (alpha[:, :, None, None] * activations).sum(dim=1) # Formule : sum_k (alpha_k * Ak)
+    
+        # 6. Application de ReLU et normalisation entre 0 et 1
+        cam = torch.nn.functional.relu(cam).squeeze(0) # Suppression de la dimension batch -> (h, w)
+    
+        cam_min = cam.min()
+        cam_max = cam.max()
+        cam = (cam - cam_min) / (cam_max - cam_min + 1e-8)
+    
+        return cam.detach().cpu().numpy()
+
     return (grad_cam,)
 
 
@@ -1139,6 +1301,8 @@ def _(mo):
 
     **Votre réponse :** le modèle regarde-t-il l'animal ou autre chose (fond, coussin, main) ?
     Les erreurs s'expliquent-elles par la zone regardée ?
+
+    Le modèle ne semble pas regarder l'animal.
 
     ...
     """)
@@ -1205,6 +1369,7 @@ def _(mo):
     qui somment toujours à 100 % sur les 37 races, permettent-elles de le détecter ? En service, qu'est-ce qui
     différera des images de test (photos d'utilisateurs, appareils, cadrage) ?
 
+    Même sur une image qui ne représente ni un chien ni un chat le modèle fournit quand même des prédictions mais avec des vameurs très faibles. Les images de test ne seront pas toujours de bonnes qualités (centrage, présence d'objet parasite...)
     ...
     """)
     return
@@ -1226,13 +1391,13 @@ def _(mo):
     | Rubrique | Votre réponse |
     |---|---|
     | Problème métier | Reconnaître la race d'un animal à partir d'une photo |
-    | Baseline classique et son score (test) | ... |
-    | Modèle retenu et pourquoi | ... |
-    | Métrique principale et score obtenu (test, avec son intervalle à 95 %) | ... |
-    | Coût (temps d'entraînement, temps d'inférence, matériel) | ... |
-    | Principaux cas d'échec | ... |
-    | Le deep learning est-il justifié ici ? | ... |
-    | Déployable en l'état ? Sinon, que manque-t-il ? | ... |
+    | Baseline classique et son score (test) | HOG + histogramme de couleur score: accuracy = 0.14 |
+    | Modèle retenu et pourquoi | 2 étages dégelées et 3 époques car bonne accuracy et moins couteux |
+    | Métrique principale et score obtenu (test, avec son intervalle à 95 %) | accuracy 78.1 % |
+    | Coût (temps d'entraînement, temps d'inférence, matériel) | 120s, cpu |
+    | Principaux cas d'échec | races proches physiquement |
+    | Le deep learning est-il justifié ici ? | non il perfore moins bien que le ML classique en prenant plus de temps|
+    | Déployable en l'état ? Sinon, que manque-t-il ? | déployable mais améliorable en entrainant plus à différencier des races proches |
     """)
     return
 
