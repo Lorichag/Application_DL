@@ -242,6 +242,16 @@ def _(mo):
 def iou(boite_a, boite_b):
     """IoU entre deux boîtes [x1, y1, x2, y2]. Renvoie un float dans [0, 1]."""
     # TODO 1
+    aire_int = 0
+    aire_uni = 0
+    
+    if (min(boite_a[2],boite_b[2]) > max(boite_a[0],boite_b[0])) and (min(boite_a[3],boite_b[3]) > max(boite_a[1],boite_b[1])):
+        boite_int = (max(boite_a[0],boite_b[0]),max(boite_a[1],boite_b[1]),min(boite_a[2],boite_b[2]),min(boite_a[3],boite_b[3]))
+        aire_int = (boite_int[2]-boite_int[0]) * (boite_int[3]-boite_int[1])
+
+    aire_uni = (boite_a[2]-boite_a[0]) * (boite_a[3]-boite_a[1]) + (boite_b[2]-boite_b[0]) * (boite_b[3]-boite_b[1]) - aire_int
+
+    return aire_int / aire_uni if aire_uni != 0 else 0.0
     raise NotImplementedError("À compléter")
 
 
@@ -278,7 +288,25 @@ def _(np):
     def nms(boites, scores, seuil_iou):
         """Non-Maximum Suppression. Renvoie la liste des indices conservés, par score décroissant."""
         # TODO 2
+        if len(boites) == 0:
+            return []
+    
+        indices = list(np.argsort(-scores))
+        indices_gardes = []
+    
+        while len(indices) > 0:
+            meilleur = indices.pop(0)
+            indices_gardes.append(meilleur)
+        
+            restant = []
+            for j in indices:
+                if iou(boites[j],boites[meilleur]) <= seuil_iou:
+                    restant.append(j)
+            indices = restant
+                
+        return indices_gardes
         raise NotImplementedError("À compléter")
+
     return (nms,)
 
 
@@ -384,7 +412,7 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
-    **Votre réponse :** ...
+    **Votre réponse :** Les classes sont déséquilibrés on peut voir qu'on a bbeaucoup de boite pour "person" par exemple tandis que pour certaines classes la pire étant no_boots_ on a très peu d'exemple, ainsi les classes avec le moins d'exemple risque d'être les plus mal détéctée alors que c'est justement celle qui sont le plus intéressante à détecter pour un systeme de sécurité.
     """)
     return
 
@@ -468,6 +496,14 @@ def _(images_val, mo, nms, ok_todo2, seuil_nms, tp, yolo_coco):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    A partir d'un seuil de 0.65 on commence à voir apparaitre des doublons
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ## Étape 5 — Baseline classique : détecter les casques par la couleur
 
     Les casques de chantier sont souvent jaunes, orange ou blancs. Le jaune et l'orange sont des couleurs vives et
@@ -495,7 +531,16 @@ def _(cv2, np):
     def boites_depuis_masque(masque, aire_min):
         """Une boîte [x1, y1, x2, y2] par composante connexe d'au moins aire_min pixels."""
         # TODO 3
+        boites = []
+        n, etiquettes, stats, centres =  cv2.connectedComponentsWithStats(masque.astype(np.uint8))
+
+        for i in stats[1:]:
+            if i[4] >= aire_min:
+                boite = [i[0],i[1],i[0] + i[2], i[1] + i[3]]
+                boites.append(boite)
+        return boites
         raise NotImplementedError("À compléter")
+
     return (boites_depuis_masque,)
 
 
@@ -529,9 +574,47 @@ def _(mo):
 
 @app.function
 def evaluer_detections(predictions, verites, seuil_iou=0.5):
-    """predictions : liste de (boite, score) ; verites : liste de boîtes. Renvoie tp, fp, fn, precision, rappel."""
-    # TODO 4
-    raise NotImplementedError("À compléter")
+    """Évalue les détections et renvoie tp, fp, fn, précision et rappel."""
+
+    detection = {"tp": 0, "fp": 0, "fn": 0,
+                 "precision": 0, "rappel": 0}
+
+    # Conserver les indices des vérités encore disponibles
+    verites_restantes = list(range(len(verites)))
+
+    predictions_triees = sorted(
+        predictions, key=lambda x: x[1], reverse=True
+    )
+
+    for prediction in predictions_triees:
+        boite_pred = prediction[0]
+        max_iou = -1
+        indice_max = None
+
+        for j in verites_restantes:
+            score_iou = iou(boite_pred, verites[j])
+
+            if score_iou > max_iou:
+                max_iou = score_iou
+                indice_max = j
+
+        if max_iou >= seuil_iou:
+            detection["tp"] += 1
+            verites_restantes.remove(indice_max)
+        else:
+            detection["fp"] += 1
+
+    detection["fn"] = len(verites_restantes)
+
+    denom_precision = detection["tp"] + detection["fp"]
+    if denom_precision > 0:
+        detection["precision"] = detection["tp"] / denom_precision
+
+    denom_rappel = detection["tp"] + detection["fn"]
+    if denom_rappel > 0:
+        detection["rappel"] = detection["tp"] / denom_rappel
+
+    return detection
 
 
 @app.cell(hide_code=True)
@@ -674,8 +757,8 @@ def _(mo):
     mo.md(r"""
     **Votre réponse :**
 
-    1. ...
-    2. ...
+    1. la baseline ne s'occupe que des couleurs et formes approximative
+    2. Elle ne pourrait pas detecter l'absence de casque
     """)
     return
 
@@ -795,9 +878,9 @@ def _(mo):
     mo.md(r"""
     **Votre réponse :**
 
-    1. ...
-    2. ...
-    3. ...
+    1. Les classes les mieux détéctées sont d'abords les gens puis les objets et led moins biens sont les absences d'objets, ce qui est cohérent avec le fait qu'il y avait beaucoups olus de données de='entrainement pour la présence d'objet que pour l'absence
+    2. Le mAP@0.5:0.95 est toujours inférieur car il accepte beaucoups moins de boites ce qui menent à beacoup plus de vrai négatif.  l'écart entre AP@0.5 et AP@0.5:0.95 est le plus grand pour helmet car  Le mAP@0.5:0.95 doit essayer de trouver des casques très proche de ceux de ces données d'entrainement.
+    3. 156 * 10/3 * 10 * (416/320)^2 = 8788s = 146m28s = 2h 26m 28s ccl : avoir un gpu
     """)
     return
 
@@ -838,6 +921,56 @@ def _(mo):
 def courbe_seuils(predictions_par_image, verites_par_image, seuils):
     """Précision, rappel et F1 cumulés sur toutes les images, pour chaque seuil de confiance."""
     # TODO 5
+    metriques = {"seuil": [], "precision": [], "rappel": [], "f1": []}
+
+    for seuil in seuils:
+        tp_total = 0
+        fp_total = 0
+        fn_total = 0
+        
+        for predictions, verites in zip(
+            predictions_par_image, verites_par_image
+        ):
+            predictions_filtrees = [
+                (boite, score)
+                for boite, score in predictions
+                if score >= seuil
+            ]
+            mesures = evaluer_detections(
+                predictions_filtrees, verites,seuil
+            )
+
+            tp_total += mesures["tp"]
+            fp_total += mesures["fp"]
+            fn_total += mesures["fn"]
+
+         # Calculer la précision
+        denom_precision = tp_total + fp_total
+        precision = (
+            tp_total / denom_precision
+            if denom_precision > 0 else 0
+        )
+
+        # Calculer le rappel
+        denom_rappel = tp_total + fn_total
+        rappel = (
+            tp_total / denom_rappel
+            if denom_rappel > 0 else 0
+        )
+
+        # Calculer le F1
+        f1 = (
+            2 * precision * rappel / (precision + rappel)
+            if precision + rappel > 0 else 0
+        )
+
+        # Enregistrer les résultats
+        metriques["seuil"].append(seuil)
+        metriques["precision"].append(precision)
+        metriques["rappel"].append(rappel)
+        metriques["f1"].append(f1)
+        
+    return metriques            
     raise NotImplementedError("À compléter")
 
 
@@ -1016,9 +1149,9 @@ def _(mo):
     mo.md(r"""
     **Votre réponse :**
 
-    1. ...
-    2. ...
-    3. ...
+    1. Dans le cas de no_helemt dans un système d'alerte de chantier il est surtout important de bien détecter tous les positif (de maximiser le rappel), en se basant sur la courbe de validation il faus=drait choisir un seuil proche de 0.1 même si cela causerait beaucoup de fausse alerte.
+    2. Non à ce seuil la précision et le rappel mesurés sont bien inférieur à ceux de la courbe. 40 dans le test 45 en validation et environ 400 dans le train.
+    3. ici il n'y a qu'une erreur (un oubli)
     """)
     return
 
@@ -1097,7 +1230,7 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
-    **Votre réponse :** ...
+    **Votre réponse :** L'approche permettant de compter est yolo + sam, mais la plus rapide est de loin est deeplab. Si on veut juste detecter la présence d'objet deeplab est suffisente si par contre on veut pouvoir isoler chaque objet d'un groupe d'objet il est nécessaire d'utiliser yolo + sam. En résumé une prediction deeplab, plusieurs yolo+sam.
     """)
     return
 
@@ -1157,14 +1290,14 @@ def _(mo):
     | Rubrique | Votre réponse |
     |---|---|
     | Problème métier | Détecter les personnes sans casque sur un chantier |
-    | Baseline classique et son score (test, classe casque : elle ne détecte pas l'absence de casque) | ... |
-    | Modèle retenu et pourquoi | ... |
-    | Métrique principale et score obtenu (test, classe `no_helmet`, au seuil retenu) | ... |
-    | Seuil retenu et justification métier | ... |
+    | Baseline classique et son score (test, classe casque : elle ne détecte pas l'absence de casque) |  précision = 5.3%, rappel = 10.9%, F1 = 0.07 |
+    | Modèle retenu et pourquoi | Fine tuning de yolo seuil faible car + important de détecter les absences de casques que les fausses alertes |
+    | Métrique principale et score obtenu (test, classe `no_helmet`, au seuil retenu) |sur le test : classe no_helmet, seuil 0.10 : précision 23%, rappel 42% |
+    | Seuil retenu et justification métier | 0.1 on veut eviter les faux negatifs (oublier de detecter) |
     | Coût (entraînement, inférence, matériel) ; pour l'inférence, le modèle fourni a la même architecture que le YOLOv8n de l'étape 4 | ... |
     | Principaux cas d'échec | ... |
-    | Le deep learning est-il justifié ici ? | ... |
-    | Déployable en l'état ? Sinon, que manque-t-il ? | ... |
+    | Le deep learning est-il justifié ici ? | Oui meilleur choix est de fine tunner un modèle déjà existant |
+    | Déployable en l'état ? Sinon, que manque-t-il ? | Non, résultat pas assez convainquant nécessite plus d'entrainement (plus de données d'entrainement) |
     """)
     return
 
