@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.25.0"
+__generated_with = "0.25.1"
 app = marimo.App(
     width="medium",
     app_title="TD 3 - Séries temporelles",
@@ -237,8 +237,8 @@ def _(mo):
     mo.md(r"""
     **Votre réponse :**
 
-    1. ...
-    2. ...
+    1. On peut coir que sur une journée l'ecart moyen à la moyenne semble suivre un même schéma le matin il sera plus faible que la moyenne l'après midi plus fort et tard le soir de nouveau plus faible. De même si on prend une plus grande période on peut observer que la température de l'huile semble plus élevée en été, diminue à l'approche de l'hiver puis réaugmente denouveau.
+    2. On peut voir que la température était majoritairement beaucoup plus forte en 2016 (début de période) que les années suivantes ce qui pourrait posé des problèmes pour un modèle entraîné sur le début car il serait testé sur des valeurs différentes de celle de sont entraînement.
     """)
     return
 
@@ -259,15 +259,29 @@ def _(mo):
     return
 
 
-@app.function
-def decouper_et_normaliser(valeurs, n_train, n_val, n_test):
-    """Découpage chronologique puis normalisation avec les statistiques de l'entraînement."""
-    # TODO 1
-    raise NotImplementedError("À compléter")
+@app.cell
+def _(np):
+    def decouper_et_normaliser(valeurs, n_train, n_val, n_test):
+        """Découpage chronologique puis normalisation avec les statistiques de l'entraînement."""
+        # TODO 1
+        train = valeurs[:n_train]
+        val = valeurs[n_train:(n_val+n_train)]
+        test = valeurs[(n_val+n_train):(n_test+n_val+n_train)]
+
+        moy = np.mean(train,axis=0)
+        ectype = np.std(train,axis=0)
+    
+        train = (train - moy) / ectype
+        val = (val - moy) / ectype
+        test = (test - moy) / ectype
+        return (train, val, test, moy, ectype)
+        raise NotImplementedError("À compléter")
+
+    return (decouper_et_normaliser,)
 
 
 @app.cell(hide_code=True)
-def _(mo, tests, tp):
+def _(decouper_et_normaliser, mo, tests, tp):
     ok_todo1, _affichage = tp.verifier(tests.tests_decoupage(decouper_et_normaliser), mo)
     _affichage
     return (ok_todo1,)
@@ -295,7 +309,12 @@ def _(np):
     def creer_fenetres(serie, taille_entree, horizon):
         """Série 1D -> X (N, taille_entree), Y (N, horizon)."""
         # TODO 2
+        N = len(serie)-taille_entree-horizon+1
+        X = [serie[i:i+taille_entree] for i in range(N)]
+        Y = [serie[i+taille_entree:i+taille_entree+horizon] for i in range(N)]
+        return (np.array(X),np.array(Y))
         raise NotImplementedError("À compléter")
+
     return (creer_fenetres,)
 
 
@@ -307,7 +326,16 @@ def _(creer_fenetres, mo, tests, tp):
 
 
 @app.cell
-def _(creer_fenetres, ett, mo, np, ok_todo1, ok_todo2, tp):
+def _(
+    creer_fenetres,
+    decouper_et_normaliser,
+    ett,
+    mo,
+    np,
+    ok_todo1,
+    ok_todo2,
+    tp,
+):
     tp.bloquer_si(not (ok_todo1 and ok_todo2), mo, "Terminez les TODO 1 et 2 pour préparer les données.")
     ENTREE, HORIZON = 96, 24  # 4 jours de passé pour prévoir les 24 prochaines heures
     _valeurs = ett.drop(columns="date").to_numpy(dtype=np.float32)
@@ -357,12 +385,19 @@ def _(np):
     def prevision_naive(X, horizon):
         """Répète la dernière valeur observée."""
         # TODO 3a
+        derniere_valeur = X[:, -1]
+        Y=np.repeat(derniere_valeur[:,np.newaxis],horizon,axis=1)
+        return np.array(Y)
         raise NotImplementedError("À compléter")
 
     def prevision_saisonniere(X, horizon, periode=24):
         """Recopie ce qui s'est passé une période plus tôt (horizon <= periode)."""
         # TODO 3b
+        dernier_cycle= X[:,-periode:]
+        Y=dernier_cycle[:, :horizon]
+        return np.array(Y)
         raise NotImplementedError("À compléter")
+
     return prevision_naive, prevision_saisonniere
 
 
@@ -435,7 +470,7 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
-    **Votre réponse :** ...
+    **Votre réponse :** La prévision saisonnière fait moins bien que la naîve ce qui m'étonne car la température semblait varier en fonctione de l'heure une explication pourrait être que la température varie plutôt en fct des jours que des heures.
     """)
     return
 
@@ -488,7 +523,9 @@ def _(mo):
 
 
 @app.cell
-def _(nn, torch):
+def _(nn):
+    import torch.nn.functional as F
+
     class ConvCausale(nn.Module):
         def __init__(self, canaux_entree, canaux_sortie, noyau, dilatation):
             super().__init__()
@@ -498,7 +535,10 @@ def _(nn, torch):
         def forward(self, x):  # x : (lot, canaux, temps)
             """Convolution qui conserve la longueur et ne regarde jamais le futur."""
             # TODO 4
+            y = self.conv(F.pad(x, (self.marge, 0)))
+            return y
             raise NotImplementedError("À compléter")
+
     return (ConvCausale,)
 
 
@@ -559,6 +599,7 @@ def _(mo):
 def decouper_en_patches(x, taille, pas):
     """(lot, longueur) -> (lot, n_patches, taille)."""
     # TODO 5
+    return x.unfold(1,taille, pas)
     raise NotImplementedError("À compléter")
 
 
@@ -620,7 +661,11 @@ def _(nn):
         def forward(self, x):  # x : (lot, longueur)
             """Le modèle interne prédit des écarts par rapport à la dernière valeur observée."""
             # TODO 6
+            dernier = x[:, -1:]
+            resultat = self.modele(x-dernier) + dernier
+            return resultat
             raise NotImplementedError("À compléter")
+
     return (PrevisionNormalisee,)
 
 
@@ -769,9 +814,9 @@ def _(mo):
     mo.md(r"""
     **Votre réponse :**
 
-    1. ...
-    2. ...
-    3. ...
+    1. Sans normalisation par fenêtre tous les réseaux font largement moins bien que la révision naïve, avec normalisation les 3 résaux font mieux, le prétraitement est donc indispensable.
+    2. le meilleur modèle est la régression linéaire, elle ne nécéssite que 2328 paramètres sont environ 10x que les résaux et s'execute en 0.09 contrairement au résaux qui prennent 30,40 et 90 secondes.
+    3. Le transformer fait moins biens que le LSTM et le TCN, pour prendre l'aventage il lui faudarait une plus grende longeur d'horizon car on peut voir que sur la fin c'est lui le plus proche de la réalité.
     """)
     return
 
@@ -899,11 +944,28 @@ def _(mo):
 
 
 @app.cell
-def _(torch):
+def _(torch, tp):
     def erreur_reconstruction(modele, X):
         """Une erreur quadratique moyenne par fenêtre : tableau numpy de forme (N,)."""
         # TODO 7
+        X_tensor = torch.as_tensor(X, dtype=torch.float32)
+        X_tensor = X_tensor.to(tp.appareil())
+
+        with torch.no_grad():
+
+            # 4. Reconstruire les fenêtres
+            reconstruction = modele(X_tensor)
+
+            # 5. Calculer l'erreur quadratique moyenne
+            scores = torch.mean(
+                (X_tensor - reconstruction) ** 2,
+                dim=(1, 2)
+            )
+
+        return scores.cpu().numpy()
+        
         raise NotImplementedError("À compléter")
+
     return (erreur_reconstruction,)
 
 
@@ -930,17 +992,39 @@ def _(mo):
     return
 
 
-@app.cell
-def _(np):
-    def precision_rappel(scores, etiquettes, seuil):
-        """Renvoie (precision, rappel) pour les alertes scores > seuil."""
-        # TODO 8
-        raise NotImplementedError("À compléter")
-    return (precision_rappel,)
+@app.function
+def precision_rappel(scores, etiquettes, seuil):
+    """Renvoie (precision, rappel) pour les alertes scores > seuil."""
+    # TODO 8
+    prediction=[]
+    va=0
+    fa=0
+    vn=0
+    fn=0
+    for score in scores:
+        if score > seuil:
+            prediction.append(1)
+        else:
+            prediction.append(0)
+
+    for i in range(len(etiquettes)):
+        if etiquettes[i]==0 and prediction[i] == 0:
+            vn+=1
+        elif etiquettes[i]==1 and prediction[i] == 1:
+            va+=1
+        elif etiquettes[i]==1 and prediction[i] == 0:
+            fn+=1
+        else:
+            fa+=1
+    precision = va / (va + fa) if va+fa!=0 else 0
+    recall = va / (va + fn) if va+fn!=0 else 0
+
+    return (precision,recall)
+    raise NotImplementedError("À compléter")
 
 
 @app.cell(hide_code=True)
-def _(mo, precision_rappel, tests, tp):
+def _(mo, tests, tp):
     ok_todo8, _affichage = tp.verifier(tests.tests_precision_rappel(precision_rappel), mo)
     _affichage
     return (ok_todo8,)
@@ -970,7 +1054,6 @@ def _(
     ok_todo7,
     ok_todo8,
     plt,
-    precision_rappel,
     tp,
     y_anomalie,
 ):
@@ -1027,7 +1110,6 @@ def _(
     np,
     ok_todo8,
     plt,
-    precision_rappel,
     scores_anomalie,
     scores_validation,
     seuil_centile,
@@ -1113,11 +1195,12 @@ def _(mo):
     **Votre réponse :**
 
     1. Quel seuil retiendriez-vous si une panne de transformateur coûte 50 fois plus cher qu'un déplacement
-       inutile ? Et si l'équipe ne peut traiter que deux alertes par semaine ?
-    2. Le seuil choisi sur la validation donne-t-il, sur le test, les fausses alertes et les oublis que vous
+       inutile ? Et si l'équipe ne peut traiter que deux alertes par semaine ? Si une panne coute 50 fois plus cher qu'un déplacement il faudrait avoir un seuil faible pour laisser passé le moins d'anomalie possible et donc parendre un seuil inférieur à celui pour la validation comme 0.5 ou même 0.4. Et si l'équipe ne peut traiter que deux alertes par semaine dans ce cas il faut prendre un seuil élevé pour limiter le nombre de fausse alerte comme 0.9.
+
+    3. Le seuil choisi sur la validation donne-t-il, sur le test, les fausses alertes et les oublis que vous
        attendiez ? Les scores se répartissent-ils de la même façon sur les deux périodes ? Si ce n'est pas le
-       cas, que faudrait-il prévoir pour un système qui reste en service plusieurs mois ?
-    3. Quels types d'anomalies injectées sont les plus difficiles à détecter, et pourquoi ?
+       cas, que faudrait-il prévoir pour un système qui reste en service plusieurs mois ? Il donne pratiquement le même nombre d'anomalie mais beaucoup moins de fausse alerte. Les scores ne se répartissent pas de la même façon. Il faudrait pouvoir adapter le suil aux besoins.
+    4. Quels types d'anomalies injectées sont les plus difficiles à détecter, et pourquoi ? Ce sont les pics et le bruit car ils ne font pas suffisament varier la MAE pour devenir facilement détectable.
 
     ...
     """)
@@ -1138,14 +1221,14 @@ def _(mo):
     | Rubrique | Prévision de la température | Détection d'anomalies |
     |---|---|---|
     | Problème métier | Anticiper une surchauffe du transformateur | Alerter l'opérateur sur un comportement anormal |
-    | Baseline classique et son score | ... | ... |
-    | Modèle retenu et pourquoi | ... | ... |
-    | Métrique principale et score obtenu | ... | ... |
-    | Seuil ou réglage retenu, justification métier | ... | ... |
-    | Coût (entraînement, inférence, matériel) | ... | ... |
-    | Principaux cas d'échec | ... | ... |
-    | Le deep learning est-il justifié ici ? | ... | ... |
-    | Déployable en l'état ? Sinon, que manque-t-il ? | ... | ... |
+    | Baseline classique et son score | naive : 1.269 | pca  0.445|
+    | Modèle retenu et pourquoi | regression linéaire car meilleure perf et moins coûteux | autoencodeur car meilleur score |
+    | Métrique principale et score obtenu | MAE : 1.146 | AP 0.557 |
+    | Seuil ou réglage retenu, justification métier | fenêtre de 96 heures car plus représentatif | seuil faible (0.5) car le coût des anomalie manqué est bien plus important que celui des fausses alertes |
+    | Coût (entraînement, inférence, matériel) | cpu 0.09s | cpu 24s |
+    | Principaux cas d'échec | ? | les anomalies difficiles a repérer (celles qui ne font pas beaucoup varier le score) |
+    | Le deep learning est-il justifié ici ? | non plus coûteux et moins performant | oui temps d'execution acceptable et bien meilleur résultats |
+    | Déployable en l'état ? Sinon, que manque-t-il ? | non résultats pas satisfaisant | non, nécessite de mieux pouvoir gérer les anomalies plus complexes à détecter. |
     """)
     return
 
@@ -1168,6 +1251,7 @@ def _(mo):
     classique a-t-elle fait jeu égal ou mieux ? Proposez une règle pratique pour décider, au début d'un
     projet, s'il faut investir dans un réseau de neurones.
 
+    Le DL a gagné en détection d'objet et detection d'anomalies, dans les autres cas la méthode classique faisait tout aussi bien voir mieux. Dans tous les cas le deep learning sera plus couteux, le plus simple est donc de partir d'un modèle simple de voir ses résultats et de décider ensuite dans le cas où les résultats sont mauvais si on accepte le coût plus important du DL pour espérer de meilleurs résultats.
     ...
     """)
     return
