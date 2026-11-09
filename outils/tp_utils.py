@@ -1,4 +1,4 @@
-"""Outils communs aux TD du module « Applications et Modèles en IA ».
+"""Outils communs aux TD du module « Application au deep learning ».
 
 Ce fichier est fourni : vous n'avez pas à le modifier. Il regroupe ce qui n'est
 pas l'objet du TD (chargement des données, affichage, cache, exécution des tests)
@@ -289,22 +289,8 @@ def _classe_neu(p: Path):
     return _NEU_PREFIXES.get(nom.split("_")[0])
 
 
-def charger_neu(n_train_par_classe: int = 30, n_test_par_classe: int = 100, graine: int = 0,
-                n_val_par_classe: int | None = None):
-    """Images de défauts d'acier NEU-DET (6 classes), à placer dans donnees/NEU/ (voir README).
-
-    Renvoie (images_train, y_train, images_test, y_test, noms_classes).
-    Avec n_val_par_classe, renvoie (images_train, y_train, images_val, y_val, images_test, y_test, noms_classes).
-    Les images de chaque classe sont mélangées une seule fois (graine fixe) : le test est pris en premier, puis la
-    validation, puis l'entraînement. Le test ne dépend donc ni de la taille de l'entraînement ni de la présence d'une
-    validation, et l'entraînement à 10 images par classe est inclus dans celui à 30.
-    """
-    if MODE_TEST:
-        a, b, c, d, _ = _pets_synthetiques(n_train_par_classe, 20, graine, n_classes=6)
-        if n_val_par_classe is None:
-            return a, b, c, d, NEU_CLASSES
-        v, w, _, _, _ = _pets_synthetiques(min(n_val_par_classe, 10), 1, graine + 1, n_classes=6)
-        return a, b, v, w, c, d, NEU_CLASSES
+def _neu_images():
+    """Les images NEU-DET de donnees/NEU/, sans doublons, avec leur classe (indices dans NEU_CLASSES)."""
     dossier = DONNEES / "NEU"
     fichiers = sorted(p for p in dossier.rglob("*") if p.suffix.lower() in {".bmp", ".jpg", ".jpeg", ".png"})
     fichiers = [p for p in fichiers if _classe_neu(p)]
@@ -315,20 +301,66 @@ def charger_neu(n_train_par_classe: int = 30, n_test_par_classe: int = 100, grai
         if p.name not in vus:
             vus.add(p.name)
             uniques.append(p)
-    y = [NEU_CLASSES.index(_classe_neu(p)) for p in uniques]
+    return uniques, [NEU_CLASSES.index(_classe_neu(p)) for p in uniques]
+
+
+def _neu_parties(y, n_test_par_classe, n_val_par_classe, graine):
+    """Indices de test, de validation et du reste (entraînement possible), tirés classe par classe."""
     rng = np.random.default_rng(graine)
     y_arr = np.asarray(y)
     nv = n_val_par_classe or 0
-    i_te, i_va, i_tr = [], [], []
+    i_te, i_va, i_reste = [], [], []
     for c in np.unique(y_arr):
         ids = rng.permutation(np.flatnonzero(y_arr == c)).tolist()
-        i_te += ids[:n_test_par_classe]
-        i_va += ids[n_test_par_classe:n_test_par_classe + nv]
-        i_tr += ids[n_test_par_classe + nv:n_test_par_classe + nv + n_train_par_classe]
+        i_te.append(ids[:n_test_par_classe])
+        i_va.append(ids[n_test_par_classe:n_test_par_classe + nv])
+        i_reste.append(ids[n_test_par_classe + nv:])
+    return i_te, i_va, i_reste
+
+
+def charger_neu(n_train_par_classe: int = 30, n_test_par_classe: int = 100, graine: int = 0,
+                n_val_par_classe: int | None = None):
+    """Images de défauts d'acier NEU-DET (6 classes), à placer dans donnees/NEU/ (voir README).
+
+    Renvoie (images_train, y_train, images_test, y_test, noms_classes).
+    Avec n_val_par_classe, renvoie (images_train, y_train, images_val, y_val, images_test, y_test, noms_classes).
+    Les images de chaque classe sont mélangées une seule fois (graine fixe) : le test est pris en premier, puis la
+    validation, puis l'entraînement. Le test ne dépend donc ni de la taille de l'entraînement ni de la présence d'une
+    validation, et l'entraînement à 10 images par classe est inclus dans celui à 30. Le découpage est le même que
+    celui de decoupage_neu (mêmes valeurs de n_test_par_classe, n_val_par_classe et graine).
+    """
+    if MODE_TEST:
+        a, b, c, d, _ = _pets_synthetiques(n_train_par_classe, 20, graine, n_classes=6)
+        if n_val_par_classe is None:
+            return a, b, c, d, NEU_CLASSES
+        v, w, _, _, _ = _pets_synthetiques(min(n_val_par_classe, 10), 1, graine + 1, n_classes=6)
+        return a, b, v, w, c, d, NEU_CLASSES
+    uniques, y = _neu_images()
+    i_te, i_va, i_reste = _neu_parties(y, n_test_par_classe, n_val_par_classe, graine)
+    i_tr = [i for r in i_reste for i in r[:n_train_par_classe]]
+    i_te, i_va = [i for r in i_te for i in r], [i for r in i_va for i in r]
     jeu = lambda idx: ([uniques[i] for i in sorted(idx)], [y[i] for i in sorted(idx)])
     if n_val_par_classe is None:
         return jeu(i_tr) + jeu(i_te) + (NEU_CLASSES,)
     return jeu(i_tr) + jeu(i_va) + jeu(i_te) + (NEU_CLASSES,)
+
+
+def decoupage_neu(n_test_par_classe: int = 100, n_val_par_classe: int = 20, graine: int = 0) -> dict:
+    """Découpage commun de NEU-DET, pour la classification et pour la détection.
+
+    Renvoie un dictionnaire {nom de l'image sans extension : "train", "val" ou "test"}. Le test et la validation
+    sont exactement ceux de charger_neu avec les mêmes paramètres ; toutes les autres images sont en "train"
+    (charger_neu n'en prend qu'une partie, selon n_train_par_classe). À passer à voc_vers_yolo(parties=...)
+    pour que le détecteur et le classifieur soient mesurés sur les mêmes images de test.
+    """
+    uniques, y = _neu_images()
+    i_te, i_va, i_reste = _neu_parties(y, n_test_par_classe, n_val_par_classe, graine)
+    parties = {}
+    for nom, groupes in (("test", i_te), ("val", i_va), ("train", i_reste)):
+        for r in groupes:
+            for i in r:
+                parties[uniques[i].stem] = nom
+    return parties
 
 
 # --------------------------------------------------------------------------
@@ -407,7 +439,10 @@ def matrice_confusion(y_vrai, y_pred, noms, taille: float = 9):
 MODELES = RACINE / "modeles"
 MODELES.mkdir(exist_ok=True)
 
-PPE_URL = "https://github.com/ultralytics/assets/releases/download/v0.0.0/construction-ppe.zip"
+# Copie de la version d'octobre 2026 du jeu Construction-PPE (Ultralytics, AGPL-3.0) : celle du TD 2 et du modèle
+# fourni. Ultralytics a remplacé son archive le 3 novembre 2026 par une autre version (1 000 images, 12 classes,
+# sans partie test), incompatible avec le TD.
+PPE_URL = "https://github.com/FranklinB13/applications-modeles-ia-td/releases/download/donnees-construction-ppe/construction-ppe-td.zip"
 PPE_CLASSES = ["helmet", "gloves", "vest", "boots", "goggles", "none", "Person",
                "no_helmet", "no_goggle", "no_gloves", "no_boots"]
 
@@ -425,14 +460,29 @@ def _ecrire_config_yolo(config: Path, racine: Path, classes: list[str]) -> Path:
     return config
 
 
+def _ppe_complet(racine: Path) -> bool:
+    """Vrai si `racine` contient la version du TD : trois parties (train, val, test) et les 11 classes."""
+    parties = all((racine / "images" / p).is_dir() and (racine / "labels" / p).is_dir() for p in ("train", "val", "test"))
+    config = racine / "data.yaml"
+    return parties and config.exists() and "none" in config.read_text(encoding="utf-8", errors="replace")
+
+
 def preparer_construction_ppe() -> Path:
-    """Télécharge (une fois) le jeu Construction-PPE et renvoie le chemin de son fichier de configuration YOLO."""
+    """Télécharge (une fois) le jeu Construction-PPE et renvoie le chemin de son fichier de configuration YOLO.
+
+    Un dossier incomplet, ou téléchargé dans une autre version, est remplacé automatiquement."""
     import shutil
+    import urllib.error
     import zipfile
 
     racine = DONNEES / "construction-ppe"
-    if not (racine / "images" / "train").exists():
-        archive = _telecharger(PPE_URL, DONNEES / "construction-ppe.zip")
+    if not _ppe_complet(racine):
+        archive = DONNEES / "construction-ppe-td.zip"
+        try:
+            _telecharger(PPE_URL, archive)
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"Le jeu Construction-PPE n'a pas pu être téléchargé (erreur {e.code}). "
+                               "Prévenez l'enseignant.") from None
         # On décompresse dans un dossier provisoire : le dossier définitif n'apparaît qu'une fois complet.
         provisoire = DONNEES / "construction-ppe.part"
         shutil.rmtree(provisoire, ignore_errors=True)
@@ -442,9 +492,20 @@ def preparer_construction_ppe() -> Path:
         except zipfile.BadZipFile:
             archive.unlink()
             raise RuntimeError("L'archive Construction-PPE est illisible. Relancez la cellule : elle sera téléchargée de nouveau.")
+        # Si l'archive range tout dans un sous-dossier unique, on le remonte d'un niveau.
+        contenu = [p for p in provisoire.iterdir() if not p.name.startswith(".")]
+        if len(contenu) == 1 and contenu[0].is_dir():
+            provisoire = contenu[0]
+        if not _ppe_complet(provisoire):
+            archive.unlink()
+            shutil.rmtree(DONNEES / "construction-ppe.part", ignore_errors=True)
+            raise RuntimeError("L'archive Construction-PPE téléchargée n'a pas la structure attendue "
+                               "(images et labels en train, val et test). Prévenez l'enseignant.")
         shutil.rmtree(racine, ignore_errors=True)
         provisoire.rename(racine)
+        shutil.rmtree(DONNEES / "construction-ppe.part", ignore_errors=True)
         archive.unlink()
+        (DONNEES / "construction-ppe.zip").unlink(missing_ok=True)   # archive d'une ancienne version du script
     return _ecrire_config_yolo(racine / "ppe.yaml", racine, PPE_CLASSES)
 
 
@@ -531,8 +592,13 @@ def charger_deeplab():
 
 
 def voc_vers_yolo(dossier_source: Path, dossier_cible: Path, classes: list[str], graine: int = 0,
-                  proportions=(0.7, 0.15, 0.15)) -> Path:
-    """Convertit des annotations Pascal VOC (.xml) en jeu de données YOLO (train/val/test). Renvoie la config."""
+                  proportions=(0.7, 0.15, 0.15), parties: dict | None = None) -> Path:
+    """Convertit des annotations Pascal VOC (.xml) en jeu de données YOLO (train/val/test). Renvoie la config.
+
+    Sans parties, les images sont réparties au hasard selon proportions. Avec parties (par exemple
+    decoupage_neu()), chaque image va dans la partie indiquée pour son nom ; les images absentes sont ignorées.
+    Pour éviter un mélange avec d'anciens fichiers, utilisez un dossier_cible vide.
+    """
     import shutil
     import xml.etree.ElementTree as ET
 
@@ -543,7 +609,7 @@ def voc_vers_yolo(dossier_source: Path, dossier_cible: Path, classes: list[str],
     rng = np.random.default_rng(graine)
     ordre = rng.permutation(len(xmls))
     n_tr, n_va = int(proportions[0] * len(xmls)), int(proportions[1] * len(xmls))
-    parties = {i: ("train" if r < n_tr else "val" if r < n_tr + n_va else "test") for r, i in enumerate(ordre)}
+    au_hasard = {i: ("train" if r < n_tr else "val" if r < n_tr + n_va else "test") for r, i in enumerate(ordre)}
     for i, x in enumerate(xmls):
         racine = ET.parse(x).getroot()
         nom = Path(racine.findtext("filename") or x.stem).stem
@@ -559,7 +625,12 @@ def voc_vers_yolo(dossier_source: Path, dossier_cible: Path, classes: list[str],
             bb = o.find("bndbox")
             x1, y1, x2, y2 = (float(bb.findtext(k)) for k in ("xmin", "ymin", "xmax", "ymax"))
             lignes.append(f"{classes.index(c)} {(x1 + x2) / 2 / w:.6f} {(y1 + y2) / 2 / h:.6f} {(x2 - x1) / w:.6f} {(y2 - y1) / h:.6f}")
-        p = parties[i]
+        if parties is None:
+            p = au_hasard[i]
+        elif nom in parties:
+            p = parties[nom]
+        else:
+            continue
         (dossier_cible / "images" / p).mkdir(parents=True, exist_ok=True)
         (dossier_cible / "labels" / p).mkdir(parents=True, exist_ok=True)
         shutil.copy(images[nom], dossier_cible / "images" / p / images[nom].name)
