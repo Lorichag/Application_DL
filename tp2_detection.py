@@ -88,6 +88,14 @@ def _(mo, torch, tp):
     return
 
 
+app._unparsable_cell(
+    r"""
+    Ce tp a été fait avant les modifications du datasets.
+    """,
+    name="_"
+)
+
+
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
@@ -290,20 +298,20 @@ def _(np):
         # TODO 2
         if len(boites) == 0:
             return []
-    
+
         indices = list(np.argsort(-scores))
         indices_gardes = []
-    
+
         while len(indices) > 0:
             meilleur = indices.pop(0)
             indices_gardes.append(meilleur)
-        
+    
             restant = []
             for j in indices:
                 if iou(boites[j],boites[meilleur]) <= seuil_iou:
                     restant.append(j)
             indices = restant
-                
+            
         return indices_gardes
         raise NotImplementedError("À compléter")
 
