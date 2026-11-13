@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.25.0"
+__generated_with = "0.25.1"
 app = marimo.App(
     width="medium",
     app_title="TD 4 - Foundation models et IA générative",
@@ -232,7 +232,12 @@ def _(np):
     def similarite_cosinus(A, B):
         """A : (n, d), B : (m, d) -> tableau (n, m) des similarités cosinus."""
         # TODO 1
+        A_norm = A / (np.linalg.norm(A,axis=1, keepdims=True))
+        B_norm = B / (np.linalg.norm(B,axis=1, keepdims=True))
+
+        return A_norm @ B_norm.T
         raise NotImplementedError("À compléter")
+
     return (similarite_cosinus,)
 
 
@@ -263,7 +268,12 @@ def _(np, similarite_cosinus):
     def classer_zero_shot(emb_images, emb_textes, temperature=100):
         """Probabilité de chaque classe pour chaque image : softmax(temperature x cosinus)."""
         # TODO 2
+        simil_cos=similarite_cosinus(emb_images,emb_textes) * temperature
+        exp_simil = np.exp(simil_cos - np.max(simil_cos, axis=-1, keepdims=True))
+        proba = exp_simil / np.sum(exp_simil, axis=-1, keepdims=True)
+        return proba
         raise NotImplementedError("À compléter")
+
     return (classer_zero_shot,)
 
 
@@ -365,13 +375,17 @@ def _(mo):
 
     | Formulation | Accuracy sur les vignettes de réglage |
     |---|---|
-    | mots seuls, en anglais | |
-    | « a photo of a ... » | |
+    | mots seuls, en anglais | 89% |
+    | « a photo of a ... » | 91% |
     | descriptions précises | |
-    | en français | |
+    | en français | 90% |
 
-    Formulation retenue : ... Accuracy sur les vignettes mises de côté : ... Diffère-t-elle de l'accuracy de
+    parmis les formulation testées celle qui marche le mieux est a photo of a, la formulation peut changer le résultat car on peut supposer que le modèle les interpretes légerement differement.
+
+    Formulation retenue : en français, Accuracy sur les vignettes mises de côté : 90.4% Diffère-t-elle de l'accuracy de
     réglage ? Pour quelles raisons pourrait-elle en différer ?
+
+    Elle diffère très légerement, ça peut s'expliquer par des proportions differentes au sein des classes et donc des classes qui sont mieux reconnus que d'autres.
     """)
     return
 
@@ -458,8 +472,8 @@ def _(mo):
     mo.md(r"""
     **Votre réponse :**
 
-    1. ...
-    2. ...
+    1. Sur le schéma ma spnde lineaire dépasse le zéro-shot dès que le nombre d'exemple annotés par classe atteint 2.
+    2. A nombre d'éxemple égal l'approche classique à toujours une accuracy inférieur à celle de la sonde linéaire cependant cette différence réduit lorsque le nombre d'exemple annotés augmente.
     3. ...
     """)
     return
@@ -488,7 +502,11 @@ def _(np, similarite_cosinus):
     def rechercher(emb_requete, emb_corpus, k=5):
         """Indices des k éléments du corpus les plus proches de la requête (similarité cosinus décroissante)."""
         # TODO 3
+        valeurs = similarite_cosinus(emb_requete[None, :],emb_corpus)
+        valeurs = np.argsort(-valeurs[0])
+        return valeurs[:k]
         raise NotImplementedError("À compléter")
+
     return (rechercher,)
 
 
@@ -564,7 +582,11 @@ def _(np):
     def precision_a_k(indices, pertinents, k):
         """Proportion d'images pertinentes parmi les k premiers résultats."""
         # TODO 4
+        k_indices=indices[:k]
+        precision = np.sum(pertinents[k_indices]) / k
+        return precision
         raise NotImplementedError("À compléter")
+
     return (precision_a_k,)
 
 
@@ -664,6 +686,10 @@ def _(mo):
     Laquelle retrouve le *contenu* (ce que font les personnes, ce qu'elles portent) ? Comparez la précision
     des différentes requêtes : lesquelles réussissent, lesquelles échouent, et comment l'expliquez-vous ?
 
+    Clip se basse sur des descriptions associé aux images tandis que la méthode classique se base sur des similitudes de couleur.
+    C'est clip qui à les résultats les plus satisfaisant.
+    Les requêtes qui ont des bonnes précision sont: une personne avec un casque, une personne avec une veste de sécurité.
+    Celles qui echouent sont : une personne sans casque, une personne avec des lunettes. Cela s'explique par les données d'entrainement.
     ...
     """)
     return
@@ -702,15 +728,22 @@ def _(mo):
     return
 
 
-@app.function
-def bruiter(x0, t, alphas_cumules, bruit):
-    """Saute directement à l'étape t du bruitage : x_t = racine(ac) x0 + racine(1 - ac) bruit."""
-    # TODO 5
-    raise NotImplementedError("À compléter")
+@app.cell
+def _(torch):
+    def bruiter(x0, t, alphas_cumules, bruit):
+        """Saute directement à l'étape t du bruitage : x_t = racine(ac) x0 + racine(1 - ac) bruit."""
+        # TODO 5
+        coef = alphas_cumules[t] 
+        coef = coef.reshape(-1, *[1] * (x0.dim() - 1))
+        x1 = torch.sqrt(coef) * x0 + torch.sqrt(1 - coef) * bruit
+        return x1
+        raise NotImplementedError("À compléter")
+
+    return (bruiter,)
 
 
 @app.cell(hide_code=True)
-def _(mo, tests, tp):
+def _(bruiter, mo, tests, tp):
     ok_todo5, _affichage = tp.verifier(tests.tests_bruiter(bruiter), mo)
     _affichage
     return (ok_todo5,)
@@ -732,7 +765,7 @@ def _(forme_2d, torch, tp):
 
 
 @app.cell
-def _(alphas_cumules, etape_2d, mo, ok_todo5, plt, points, torch, tp):
+def _(alphas_cumules, bruiter, etape_2d, mo, ok_todo5, plt, points, torch, tp):
     tp.bloquer_si(not ok_todo5, mo, "Terminez le TODO 5 pour voir le bruitage.")
     torch.manual_seed(0)
     _xt = bruiter(points, torch.full((len(points),), etape_2d.value), alphas_cumules, torch.randn_like(points))
@@ -787,6 +820,7 @@ def _(
     Debruiteur2D,
     alphas_cumules,
     bouton_2d,
+    bruiter,
     mo,
     ok_todo5,
     plt,
@@ -838,15 +872,26 @@ def _(mo):
     return
 
 
-@app.function
-def etape_debruitage(x_t, t, bruit_predit, betas, alphas, alphas_cumules, z):
-    """Calcule x_(t-1) à partir de x_t et du bruit prédit. z : bruit frais, ignoré quand t == 0."""
-    # TODO 6
-    raise NotImplementedError("À compléter")
+@app.cell
+def _(torch):
+    def etape_debruitage(x_t, t, bruit_predit, betas, alphas, alphas_cumules, z):
+        """Calcule x_(t-1) à partir de x_t et du bruit prédit. z : bruit frais, ignoré quand t == 0."""
+        # TODO 6
+        alpha=alphas[t]
+        alpha_cumule=alphas_cumules[t]
+        beta=betas[t]
+    
+        x_precedent = (1 / torch.sqrt(alpha)) * (x_t - (beta / torch.sqrt(1 - alpha_cumule)) * bruit_predit)
+        if t>0 :
+            x_precedent += torch.sqrt(beta) * z
+        return x_precedent
+        raise NotImplementedError("À compléter")
+
+    return (etape_debruitage,)
 
 
 @app.cell(hide_code=True)
-def _(mo, tests, tp):
+def _(etape_debruitage, mo, tests, tp):
     ok_todo6, _affichage = tp.verifier(tests.tests_debruitage(etape_debruitage), mo)
     _affichage
     return (ok_todo6,)
@@ -858,6 +903,7 @@ def _(
     alphas_cumules,
     betas,
     debruiteur_2d,
+    etape_debruitage,
     mo,
     ok_todo6,
     plt,
@@ -899,6 +945,7 @@ def _(mo):
     (essayez, puis remettez-le) ?
 
     ...
+    Les points générés sont de nouveaux points, qui suivent la même forme. (quand je veux supprimer z le todo 6 est marqué comme non compléter ce qui m'empeche de voir la suite)
     """)
     return
 
@@ -941,6 +988,7 @@ def _(
     alphas_cumules,
     betas,
     bouton_gen,
+    etape_debruitage,
     gen_classe,
     gen_force,
     mo,
@@ -980,6 +1028,7 @@ def _(mo):
     perd-on quand $g$ augmente ? Les 12 images sont-elles identiques ? D'où vient leur diversité ?
 
     ...
+    quand g=0 la condition est ignoré on a donc pas ce qu'on demande, avec g=2 on obtient des images (floues) qui ressemble à ce qu'on demande. Avec g=5 les images sont plus nettes. Les images ne sont pas identiques leur diversité vient justement du niveau de g.
     """)
     return
 
@@ -1016,13 +1065,13 @@ def _(mo):
     | Rubrique | Votre réponse |
     |---|---|
     | Problème métier | Retrouver dans une banque d'images de chantier les situations décrites par un responsable sécurité |
-    | Baseline classique et son score | ... |
-    | Modèle retenu et pourquoi | ... |
-    | Métrique principale et score obtenu | ... |
-    | Coût (annotation, entraînement, inférence, matériel) | ... |
-    | Principaux cas d'échec | ... |
-    | Le foundation model est-il justifié ici ? | ... |
-    | Déployable en l'état ? Sinon, que manque-t-il ? | ... |
+    | Baseline classique et son score | descripteur fait main (image réduite à 16 x 16 + histogrammes de couleur) et un SVM score dépend du nombre d'exemple annoté au mieux accuracy vers 0.7 |
+    | Modèle retenu et pourquoi | clip + sonde linéaire var meilleure accuracy quand suffisament d'exemples annotés |
+    | Métrique principale et score obtenu | accuracy proche de 1 quand suffisament d'exemple annoté par classe |
+    | Coût (annotation, entraînement, inférence, matériel) | aux moins 2 annotations par classe,entrainement cours (quelques secondes), CPU |
+    | Principaux cas d'échec | reconnaître des classes peut représentées durant l'entraînement |
+    | Le foundation model est-il justifié ici ? | oui car il donne des meilleurs résultats que la méthode classique sans nécessairement avoir un coût très élevé|
+    | Déployable en l'état ? Sinon, que manque-t-il ? | oui mais pourrait nécéssité un meilleur entraînement pour les classes moins représentées |
     """)
     return
 
@@ -1045,7 +1094,14 @@ def _(mo):
     et ce qui ne se compare pas. Dans quel cas partiriez-vous d'un foundation model, dans quel cas d'un modèle
     spécialisé ?
 
-    ...
+
+    Yolo : Nécessite des images annotées avec les classes et les coordonnées des objets (bounding boxes), Plus long : il faut préparer les annotations, entraîner et ajuster le modèle, Bon pour détecter et localiser précisément les 11 classes apprises, si l'entraînement est de qualité.
+
+    Clip: Ne nécessite pas de nouvelles images annotées pour effectuer une classification zero-shot, Très court : on peut utiliser directement le modèle pré-entraîné, sans entraînement supplémentaire, Bon pour reconnaître et nommer un objet déjà découpé parmi les 5 classes proposées, mais dépend des classes et des descriptions textuelles.
+
+    On peut comparer le besoin en image annoté, mais on ne peut pas comparer les temps d'execution car ils n'ont pas vocation à régler le même problème de même pour la qualité du résultat.
+    Foundation model: On veut juste classifier quelquechose avec peu d'annotations.
+    Modèle spécialisé: On veut faire de la détection d'évenement.
     """)
     return
 
