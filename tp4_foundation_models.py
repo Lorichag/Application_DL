@@ -880,7 +880,7 @@ def _(torch):
         alpha=alphas[t]
         alpha_cumule=alphas_cumules[t]
         beta=betas[t]
-    
+
         x_precedent = (1 / torch.sqrt(alpha)) * (x_t - (beta / torch.sqrt(1 - alpha_cumule)) * bruit_predit)
         if t>0 :
             x_precedent += torch.sqrt(beta) * z
